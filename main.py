@@ -121,9 +121,7 @@ def apply_prune(model, device, args):
             idx += 1
     return dict_mask
 
-
-def train(args, model, device, train_loader, test_loader, loss, optimizer):
-    #==============pretrain==================
+def pretrain(args, model, device, train_loader, test_loader, loss, optimizer):
     epoch = 0
     while(True):
         model.train()
@@ -143,12 +141,12 @@ def train(args, model, device, train_loader, test_loader, loss, optimizer):
         if(sum_loss<0.0013):
             break
     torch.save(model.state_dict(), os.path.join(args.checkpoints, 'pre_depthnet.pth'))
+
+def admm(args, model, device, train_loader, test_loader, loss, optimizer):
     zeros, sum_params = compute_weight_zeros(model)
     print('pretrain zeros:',zeros, 'sum_params:', sum_params)
     #===============admm=====================
-
     Z, U = initialize_Z_U(model)
-
     for epoch in range(args.admm_epochs):
         model.train()
         for i, (data, target) in tqdm(enumerate(train_loader), desc=f'Epoch:{epoch}/{args.admm_epochs}.Loop:Train',total=len(train_loader)):
@@ -168,7 +166,9 @@ def train(args, model, device, train_loader, test_loader, loss, optimizer):
     zeros, sum_params = compute_weight_zeros(model)
     print('emmm zeros:', zeros, 'sum_params:', sum_params)
     torch.save(model.state_dict(), os.path.join(args.checkpoints, 'admm_depthnet.pth'))
-    #=================retrain=================
+    return mask
+
+def retrain(args, model, device, train_loader, test_loader, loss, optimizer, mask):
 
     for epoch in range(args.pruned_epochs):
         model.train()
@@ -188,7 +188,10 @@ def train(args, model, device, train_loader, test_loader, loss, optimizer):
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--checkpoints',type=str, default='/disk1/lcx/cifa')
+    parser.add_argument('--pre_model_path', type=str, default='./data/pre_depthnet.pth')
+    parser.add_argument('--admm_model_path', type=str, default='./data/admm_depthnet.pth')
+    parser.add_argument('--pruned_model_path', type=str, default='./data/pruned_depthnet.pth')
+    parser.add_argument('--checkpoints',type=str, default='./data')
     parser.add_argument('--percent', type=list, default=[0.8,0.92,0.991,0.93,0.91,0.92,0.93,0.94,0.92,0.93,
                                                          0.88,0.92,0.991,0.93,0.91,0.92,0.93,0.94,0.92,0.93,
                                                          0.89,0.92,0.991,0.93,0.91,0.92,0.93,0.94,0.92,0.93,
@@ -196,8 +199,8 @@ if __name__=='__main__':
                                                          0.89,0.92,0.991,0.93,0.91,0.92,0.93,0.94,0.92,0.93])
     parser.add_argument('--lamda', type=float, default=0.00005)
     parser.add_argument('--pre_epochs', type=int, default=10)
-    parser.add_argument('--admm_epochs', type=int, default=20)
-    parser.add_argument('--pruned_epochs', type=int, default=10)
+    parser.add_argument('--admm_epochs', type=int, default=30)
+    parser.add_argument('--pruned_epochs', type=int, default=50)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--adam_epsilon', type=float, default=1e-8)
     parser.add_argument('--no_cuda', type=bool, default=False)
@@ -228,5 +231,12 @@ if __name__=='__main__':
     model = models.resnet50(num_classes=10, pretrained=False).to(device)
     optimizer = CusAdam(model.named_parameters(), lr=args.lr, eps=args.adam_epsilon)
     loss = nn.CrossEntropyLoss()
-    train(args, model, device, train_loader, test_loader, loss, optimizer)
+    #预训练
+    # pretrain(args, model, device, train_loader, test_loader, loss, optimizer)
+    #加载预训练模型
+    model.load_state_dict(torch.load(args.pre_model_path))
 
+    mask = admm(args,model,device,train_loader,test_loader,loss,optimizer)
+    model.load_state_dict(torch.load(args.admm_model_path))
+
+    retrain(args,model,device,train_loader,test_loader,loss,optimizer,mask)
